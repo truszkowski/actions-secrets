@@ -2,58 +2,89 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"flag"
+	"fmt"
 	"log"
 	"os"
-
-	"github.com/google/go-github/v59/github"
-	"github.com/jamesruan/sodium"
 )
 
 func main() {
 	ctx := context.Background()
-	client := github.NewClient(nil).WithAuthToken(os.Getenv("TOKEN"))
+	token := os.Getenv("TOKEN")
 
-	var owner, repo string
+	var owner, repo, applyPath, deletePath, listPath string
 	flag.StringVar(&owner, "owner", "", "owner of the repository")
 	flag.StringVar(&repo, "repo", "", "name of the repository")
+	flag.StringVar(&applyPath, "apply", "", "path to the file containing secrets to apply")
+	flag.StringVar(&deletePath, "delete", "", "path to the file containing secrets to delete")
+	flag.StringVar(&listPath, "list", "", "path to the file containing secrets to list")
+
+	var verbose, override, listAll bool
+	flag.BoolVar(&verbose, "verbose", false, "enable verbose logging")
+	flag.BoolVar(&override, "override", false, "override existing secrets")
+	flag.BoolVar(&listAll, "list-all", false, "list all secrets")
 	flag.Parse()
 
-	pubKey, _, err := client.Actions.GetRepoPublicKey(ctx, owner, repo)
-	if err != nil {
-		log.Fatalln("Error fetching public key:", err)
+	client := NewClient(owner, repo, token, verbose)
+
+	if deletePath != "" {
+		names, err := loadEnvVarsNames(deletePath)
+		if err != nil {
+			log.Fatalf("Error loading secret names from file: %v", err)
+		}
+
+		deleted, err := client.DeleteSecrets(ctx, names)
+		if err != nil {
+			log.Fatalln("Error deleting secrets:", err)
+		}
+		_ = deleted
 	}
 
-	log.Println("public key:", pubKey.GetKeyID(), pubKey.GetKey())
+	if applyPath != "" {
+		secrets, err := loadEnvVars(applyPath)
+		if err != nil {
+			log.Fatalf("Error loading secrets from file: %v", err)
+		}
 
-	secrets, _, err := client.Actions.ListRepoSecrets(ctx, owner, repo, nil)
-	if err != nil {
-		log.Fatalln("Error fetching secrets:", err)
+		applied, err := client.ApplySecrets(ctx, secrets, override)
+		if err != nil {
+			log.Fatalln("Error applying secrets:", err)
+		}
+		_ = applied
 	}
 
-	for _, secret := range secrets.Secrets {
-		log.Println(secret.Name, secret.CreatedAt)
+	if listPath != "" {
+		names, err := loadEnvVarsNames(listPath)
+		if err != nil {
+			log.Fatalf("Error loading secret names from file: %v", err)
+		}
+
+		secrets, err := client.ListSecrets(ctx, names)
+		if err != nil {
+			log.Fatalln("Error listing secrets:", err)
+		}
+
+		for _, secret := range secrets {
+			if verbose {
+				fmt.Println(secret.Name, "created:", secret.CreatedAt.Format("2006-01-02T15:04:05"), "updated:", secret.UpdatedAt.Format("2006-01-02T15:04:05"))
+			} else {
+				fmt.Println(secret.Name)
+			}
+		}
 	}
 
-	rawKey, err := base64.StdEncoding.DecodeString(pubKey.GetKey())
-	if err != nil {
-		log.Fatalln("Error decoding public key:", err)
+	if listAll {
+		secrets, err := client.ListAllSecrets(ctx)
+		if err != nil {
+			log.Fatalln("Error listing secrets:", err)
+		}
+
+		for _, secret := range secrets {
+			if verbose {
+				fmt.Println(secret.Name, "created:", secret.CreatedAt.Format("2006-01-02T15:04:05"), "updated:", secret.UpdatedAt.Format("2006-01-02T15:04:05"))
+			} else {
+				fmt.Println(secret.Name)
+			}
+		}
 	}
-
-	kp := sodium.MakeBoxKP()
-	_ = rawKey
-
-	//kp.PublicKey
-	//kp.SecretKey
-
-	/*encryptedValue := base64.StdEncoding.EncodeToString(encryptedRaw)
-
-	resp, err := client.Actions.CreateOrUpdateRepoSecret(ctx, "owner", "repo", &github.EncryptedSecret{
-		Name:           "TEST_SECRET_TEST",
-		KeyID:          pubKey.GetKeyID(),
-		EncryptedValue: encryptedValue,
-	})*/
-
-	log.Println(resp, err)
 }
